@@ -64,6 +64,7 @@ pub struct LogEntry {
     pub timestamp: Duration,
     pub channel: String,
     pub message: String,
+    pub args: HashMap<String, String>,
 }
 
 pub struct MetricRecord {
@@ -160,27 +161,32 @@ impl MetricPipeline {
             }
         }
 
-        if is_snapshot {
-            logs.push(LogEntry {
-                timestamp,
-                channel: "log.pipeline".into(),
-                message: format!(
-                    "snapshot cycle={cycle} collectors=[{}] samples={} collect_ms={collect_ms:.1}",
-                    fresh_keys.join(","),
-                    samples.len(),
-                ),
-            });
+        let raw_json = serde_json::to_string(&raw).unwrap_or_default();
+
+        let (kind, changed_info) = if is_snapshot {
+            ("snapshot", format!("{}", samples.len()))
         } else {
-            logs.push(LogEntry {
-                timestamp,
-                channel: "log.pipeline".into(),
-                message: format!(
-                    "delta cycle={cycle} changed={changed_count}/{} collectors=[{}] collect_ms={collect_ms:.1}",
-                    samples.len(),
-                    fresh_keys.join(","),
-                ),
-            });
-        }
+            ("delta", format!("{changed_count}/{}", samples.len()))
+        };
+
+        let mut args = HashMap::new();
+        args.insert("cycle".into(), cycle.to_string());
+        args.insert("kind".into(), kind.into());
+        args.insert("changed".into(), changed_info);
+        args.insert("collectors".into(), fresh_keys.join(","));
+        args.insert("collect_ms".into(), format!("{collect_ms:.1}"));
+        args.insert("data".into(), raw_json.clone());
+
+        logs.push(LogEntry {
+            timestamp,
+            channel: "log.system".into(),
+            message: format!(
+                "{kind} cycle={cycle} collectors=[{}] changed={} collect_ms={collect_ms:.1} {raw_json}",
+                fresh_keys.join(","),
+                args.get("changed").unwrap(),
+            ),
+            args,
+        });
 
         MetricRecord {
             timestamp,

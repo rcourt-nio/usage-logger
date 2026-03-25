@@ -206,12 +206,15 @@ fn main() {
         if drop_count > 0 && last_drop_log.elapsed() >= Duration::from_secs(5) {
             let msg = format!("dropped {drop_count} records (dispatcher behind)");
             eprintln!("Warning: {msg}");
+            let mut args = std::collections::HashMap::new();
+            args.insert("dropped".into(), drop_count.to_string());
             metric_record.logs.push(LogEntry {
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default(),
-                channel: "log.pipeline".into(),
+                channel: "log.system".into(),
                 message: msg,
+                args,
             });
             drop_count = 0;
             last_drop_log = Instant::now();
@@ -249,6 +252,8 @@ fn build_nominal_sink(
     let bearer = BearerToken::new(token)?;
     let rid = ResourceIdentifier::new(dataset)?;
 
+    let base_url = url.unwrap_or("https://api.gov.nominal.io/api");
+
     // nominal-streaming's NominalCoreConsumer needs a tokio runtime handle
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -264,7 +269,7 @@ fn build_nominal_sink(
     let mut builder = NominalDatasetStreamBuilder::new()
         .stream_to_core(bearer, rid, handle);
 
-    if let Some(base_url) = url {
+    if url.is_some() {
         builder = builder.with_options(NominalStreamOpts {
             base_api_url: base_url.to_string(),
             ..NominalStreamOpts::default()
@@ -276,5 +281,9 @@ fn build_nominal_sink(
     }
 
     let stream = builder.build();
-    Ok(nominal_sink::NominalSink::new(stream))
+
+    // Log writer uses the conjure REST endpoint: POST /storage/writer/v1/logs/{dataSourceRid}
+    let log_writer = nominal_sink::LogWriter::new(base_url, dataset, token);
+
+    Ok(nominal_sink::NominalSink::new(stream, Some(log_writer)))
 }

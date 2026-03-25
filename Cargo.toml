@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-nominal = ["dep:nominal-streaming", "dep:tokio"]
+nominal = ["dep:nominal-streaming", "dep:tokio", "dep:reqwest"]
 
 [dependencies]
 sysinfo = "0.33"
@@ -20,3 +20,4 @@ objc2-foundation = { version = "0.3", features = ["NSProcessInfo"] }
 ctrlc = "3"
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 nominal-streaming = { version = "0.7", optional = true }
+reqwest = { version = "0.12", features = ["json", "blocking"], optional = true }

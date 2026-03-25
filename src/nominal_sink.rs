@@ -5,13 +5,65 @@ use nominal_streaming::stream::NominalDatasetStream;
 use nominal_streaming::types::ChannelDescriptor;
 use std::error::Error;
 
+pub struct LogWriter {
+    client: reqwest::blocking::Client,
+    url: String,
+    token: String,
+}
+
+impl LogWriter {
+    pub fn new(base_url: &str, dataset_rid: &str, token: &str) -> Self {
+        let url = format!("{base_url}/storage/writer/v1/logs/{dataset_rid}");
+        Self {
+            client: reqwest::blocking::Client::new(),
+            url,
+            token: token.to_string(),
+        }
+    }
+
+    fn write_logs(&self, record: &MetricRecord) -> Result<(), Box<dyn Error>> {
+        if record.logs.is_empty() {
+            return Ok(());
+        }
+
+        for log in &record.logs {
+            let secs = log.timestamp.as_secs() as i64;
+            let nanos = log.timestamp.subsec_nanos() as i64;
+
+            let body = serde_json::json!({
+                "logs": [{
+                    "timestamp": { "seconds": secs, "nanos": nanos, "picos": null },
+                    "value": { "message": log.message, "args": log.args },
+                }],
+                "channel": log.channel,
+            });
+
+            let resp = self
+                .client
+                .post(&self.url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .json(&body)
+                .send()?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().unwrap_or_default();
+                return Err(format!("log write failed ({status}): {text}").into());
+            }
+        }
+
+        Ok(())
+    }
+}
+
 pub struct NominalSink {
     stream: NominalDatasetStream,
+    log_writer: Option<LogWriter>,
 }
 
 impl NominalSink {
-    pub fn new(stream: NominalDatasetStream) -> Self {
-        Self { stream }
+    pub fn new(stream: NominalDatasetStream, log_writer: Option<LogWriter>) -> Self {
+        Self { stream, log_writer }
     }
 }
 
@@ -23,7 +75,7 @@ impl OutputSink for NominalSink {
     fn consume(&mut self, record: &MetricRecord) -> Result<(), Box<dyn Error>> {
         let ts = record.timestamp;
 
-        // Push changed metric samples
+        // Push changed metric samples via streaming library
         for sample in &record.samples {
             if !sample.changed {
                 continue;
@@ -77,24 +129,17 @@ impl OutputSink for NominalSink {
             }
         }
 
-        // Push log entries as string channels
-        for log in &record.logs {
-            let cd = ChannelDescriptor::new(&log.channel);
-            self.stream.enqueue(
-                &cd,
-                vec![StringPoint {
-                    timestamp: Some(log.timestamp.into_timestamp()),
-                    value: log.message.clone(),
-                }],
-            );
+        // Push log entries via REST API (LogPoints type for log table UI)
+        if let Some(log_writer) = &self.log_writer {
+            if let Err(e) = log_writer.write_logs(record) {
+                eprintln!("[nominal] log write error: {e}");
+            }
         }
 
         Ok(())
     }
 
     fn flush(&mut self) -> Result<(), Box<dyn Error>> {
-        // NominalDatasetStream flushes on drop — nothing extra needed here.
-        // The stream's internal batch processor handles flushing.
         Ok(())
     }
 }
