@@ -29,7 +29,13 @@ impl OutputSink for NominalSink {
                 continue;
             }
 
-            let cd = ChannelDescriptor::new(&sample.path);
+            let cd = match &sample.tags {
+                Some(tags) => ChannelDescriptor::with_tags(
+                    &sample.path,
+                    tags.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                ),
+                None => ChannelDescriptor::new(&sample.path),
+            };
             match &sample.value {
                 MetricValue::Double(v) => {
                     self.stream.enqueue(

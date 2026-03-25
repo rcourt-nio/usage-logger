@@ -42,9 +42,14 @@ impl OutputSink for CsvSink {
     }
 
     fn consume(&mut self, record: &MetricRecord) -> Result<(), Box<dyn Error>> {
-        // On first snapshot, establish column order
+        // On first snapshot, establish column order (skip tagged samples)
         if !self.header_written {
-            self.columns = record.samples.iter().map(|s| s.path.clone()).collect();
+            self.columns = record
+                .samples
+                .iter()
+                .filter(|s| s.tags.is_none())
+                .map(|s| s.path.clone())
+                .collect();
 
             // Write header: metadata columns + sample columns + log column
             write!(self.writer, "timestamp,interval_ms,collect_ms,")?;
@@ -54,8 +59,11 @@ impl OutputSink for CsvSink {
             self.header_written = true;
         }
 
-        // Update last_values with current samples
+        // Update last_values with current samples (skip tagged samples)
         for sample in &record.samples {
+            if sample.tags.is_some() {
+                continue;
+            }
             self.last_values
                 .insert(sample.path.clone(), Self::format_value(&sample.value));
         }

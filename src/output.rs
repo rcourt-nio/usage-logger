@@ -67,7 +67,7 @@ impl ConsoleSink {
         // Collect the set of top-level keys that have at least one changed sample
         let mut changed_top_keys = std::collections::HashSet::new();
         for sample in &record.samples {
-            if sample.changed {
+            if sample.tags.is_none() && sample.changed {
                 // Top-level key is the first segment of the dotted path
                 if let Some(top) = sample.path.split('.').next() {
                     changed_top_keys.insert(top.to_string());
@@ -134,7 +134,9 @@ impl ConsoleSink {
 
     fn has_changed_descendant(&self, prefix: &str, record: &MetricRecord) -> bool {
         record.samples.iter().any(|s| {
-            s.changed && (s.path == prefix || s.path.starts_with(&format!("{prefix}.")))
+            s.tags.is_none()
+                && s.changed
+                && (s.path == prefix || s.path.starts_with(&format!("{prefix}.")))
         })
     }
 }

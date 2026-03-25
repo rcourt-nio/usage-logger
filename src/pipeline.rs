@@ -1,5 +1,5 @@
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,8 +35,27 @@ impl MetricValue {
 #[derive(Debug, Clone)]
 pub struct MetricSample {
     pub path: String,
+    pub tags: Option<BTreeMap<String, String>>,
     pub value: MetricValue,
     pub changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DeltaKey {
+    path: String,
+    tags: Option<Vec<(String, String)>>,
+}
+
+impl DeltaKey {
+    fn from_sample(sample: &MetricSample) -> Self {
+        Self {
+            path: sample.path.clone(),
+            tags: sample
+                .tags
+                .as_ref()
+                .map(|t| t.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +79,7 @@ pub struct MetricRecord {
 }
 
 pub struct MetricPipeline {
-    previous: HashMap<String, MetricValue>,
+    previous: HashMap<DeltaKey, MetricValue>,
     cycle: u64,
     snapshot_every: u64,
 }
@@ -113,7 +132,8 @@ impl MetricPipeline {
             if is_snapshot {
                 sample.changed = true;
             } else {
-                sample.changed = match self.previous.get(&sample.path) {
+                let key = DeltaKey::from_sample(sample);
+                sample.changed = match self.previous.get(&key) {
                     Some(prev) => prev != &sample.value,
                     None => true, // new key = changed
                 };
@@ -126,7 +146,7 @@ impl MetricPipeline {
         // Update previous state
         for sample in &samples {
             self.previous
-                .insert(sample.path.clone(), sample.value.clone());
+                .insert(DeltaKey::from_sample(sample), sample.value.clone());
         }
 
         // Generate pipeline log entries
@@ -185,15 +205,56 @@ fn flatten(prefix: &str, value: &Value, out: &mut Vec<MetricSample>) {
         }
         Value::Array(arr) => {
             for (i, val) in arr.iter().enumerate() {
+                // Existing: indexed path, no tags
                 let path = format!("{prefix}.{i}");
                 flatten(&path, val, out);
+
+                // New: aggregated path with index tag (only for object elements)
+                if val.is_object() {
+                    let tags = BTreeMap::from([("index".to_string(), i.to_string())]);
+                    flatten_tagged(prefix, val, &tags, out);
+                }
             }
         }
         _ => {
             out.push(MetricSample {
                 path: prefix.to_string(),
+                tags: None,
                 value: MetricValue::from_json(value),
                 changed: true, // default; overwritten by delta detection
+            });
+        }
+    }
+}
+
+/// Like [`flatten`], but attaches `tags` to every leaf sample produced.
+/// Used to create aggregated channels where array elements share a channel name
+/// and are distinguished by tags (e.g., `{index: "0"}`).
+fn flatten_tagged(
+    prefix: &str,
+    value: &Value,
+    tags: &BTreeMap<String, String>,
+    out: &mut Vec<MetricSample>,
+) {
+    match value {
+        Value::Object(map) => {
+            for (key, val) in map {
+                let path = format!("{prefix}.{key}");
+                flatten_tagged(&path, val, tags, out);
+            }
+        }
+        Value::Array(arr) => {
+            for (i, val) in arr.iter().enumerate() {
+                let path = format!("{prefix}.{i}");
+                flatten_tagged(&path, val, tags, out);
+            }
+        }
+        _ => {
+            out.push(MetricSample {
+                path: prefix.to_string(),
+                tags: Some(tags.clone()),
+                value: MetricValue::from_json(value),
+                changed: true,
             });
         }
     }
