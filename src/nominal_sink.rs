@@ -75,6 +75,15 @@ impl OutputSink for NominalSink {
     fn consume(&mut self, record: &MetricRecord) -> Result<(), Box<dyn Error>> {
         let ts = record.timestamp;
 
+        // Push collect_ms (excluded from samples as metadata)
+        self.stream.enqueue(
+            &ChannelDescriptor::new("collect_ms"),
+            vec![DoublePoint {
+                timestamp: Some(ts.into_timestamp()),
+                value: record.collect_ms,
+            }],
+        );
+
         // Push changed metric samples via streaming library
         for sample in &record.samples {
             if !sample.changed {
